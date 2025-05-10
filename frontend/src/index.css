@@ -1,0 +1,15 @@
+/* Make the root fill the viewport */
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+/* Center everything inside #root */
+#root {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background-color: #f5f5f5; /* optional */
+}
