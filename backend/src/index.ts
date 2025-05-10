@@ -18,7 +18,6 @@ const {
   MONGO_URI,
 } = process.env;
 
-// Redis & Mongo collection base key
 const COLLECTION = `FULLSTACK_TASK_${FIRST_NAME}`;
 
 const app = express();
@@ -28,7 +27,7 @@ const io = new Server(server, { cors: { origin: "*" } });
 app.use(cors());
 app.use(express.json());
 
-// — Redis client setup
+// Redis client
 const redisClient = createClient({
   socket: { host: REDIS_HOST, port: Number(REDIS_PORT) },
   username: REDIS_USER,
@@ -36,7 +35,7 @@ const redisClient = createClient({
 });
 redisClient.connect().catch(console.error);
 
-// — Mongoose model setup
+// Mongoose Task model
 interface Task {
   text: string;
   createdAt: Date;
@@ -47,21 +46,21 @@ const taskSchema = new Schema<TaskDoc>({
   text: { type: String, required: true },
   createdAt: { type: Date, required: true },
 });
+
 const TaskModel = mongoose.model<TaskDoc>("Task", taskSchema, COLLECTION);
 
-// Connect to MongoDB
 mongoose
   .connect(MONGO_URI!)
   .then(() => console.log("✅ MongoDB connected"))
   .catch((err) => console.error("MongoDB connection error:", err));
 
-// Shared logic to store a task in Redis + fallback to Mongo when >50 items
-async function storeTask(text: string) {
+// Shared storage logic
+async function storeTask(text: string): Promise<Task> {
   const payload = JSON.stringify({ text, createdAt: new Date() });
   await redisClient.rPush(COLLECTION, payload);
 
-  const len = await redisClient.lLen(COLLECTION);
-  if (len > 50) {
+  const count = await redisClient.lLen(COLLECTION);
+  if (count > 50) {
     const all = await redisClient.lRange(COLLECTION, 0, -1);
     const docs = all.map((s) => JSON.parse(s));
     await TaskModel.insertMany(docs);
@@ -71,7 +70,7 @@ async function storeTask(text: string) {
   return JSON.parse(payload);
 }
 
-// — WebSocket “add” handler
+// WebSocket handler
 io.on("connection", (socket) => {
   socket.on("add", async (taskText: string) => {
     const task = await storeTask(taskText);
@@ -79,31 +78,37 @@ io.on("connection", (socket) => {
   });
 });
 
-// — HTTP POST /addTask
-app.post("/addTask", async (req: Request, res: Response) => {
+// HTTP POST /addTask
+app.post("/addTask", async (req: Request, res: Response): Promise<void> => {
   const { text } = req.body;
   if (!text || typeof text !== "string") {
-    return res.status(400).json({ error: "Invalid task text" });
+    res.status(400).json({ error: "Invalid task text" });
+    return; // <— return void
   }
 
   const task = await storeTask(text);
   io.emit("newTask", task);
   res.status(201).json(task);
+  // no `return res…`
 });
 
-// — HTTP GET /fetchAllTasks
-app.get("/fetchAllTasks", async (_req: Request, res: Response) => {
-  let items = await redisClient.lRange(COLLECTION, 0, -1);
+// HTTP GET /fetchAllTasks
+app.get(
+  "/fetchAllTasks",
+  async (_req: Request, res: Response): Promise<void> => {
+    let items = await redisClient.lRange(COLLECTION, 0, -1);
 
-  if (items.length === 0) {
-    const saved = await TaskModel.find().lean();
-    items = saved.map((t) => JSON.stringify(t));
+    if (items.length === 0) {
+      const saved = await TaskModel.find().lean();
+      items = saved.map((t) => JSON.stringify(t));
+    }
+
+    res.json(items.map((s) => JSON.parse(s)));
+    // no return
   }
+);
 
-  res.json(items.map((s) => JSON.parse(s)));
-});
-
-// — Start the server
-server.listen(parseInt(PORT, 10), () => {
-  console.log(`🚀 Server running at http://localhost:${PORT}`);
+// Start
+server.listen(Number(PORT), () => {
+  console.log(`🚀 Server listening on http://localhost:${PORT}`);
 });
